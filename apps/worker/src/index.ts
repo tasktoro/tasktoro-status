@@ -114,6 +114,7 @@ const internalRefreshJsonBodySchema = z.object({
 
 const internalShardedPublicSnapshotBodySchema = z.object({
   kind: z.enum(['homepage', 'status']),
+  assembly: z.enum(['validated', 'json']).optional().default('validated'),
   measure_body_bytes: z.boolean().optional().default(false),
 });
 
@@ -395,6 +396,7 @@ async function handleInternalShardedPublicSnapshotAssemble(
   const result = await assembleShardedPublicSnapshot({
     env,
     kind: parsed.data.kind,
+    mode: parsed.data.assembly,
     measureBodyBytes: parsed.data.measure_body_bytes,
   });
   return buildInternalJsonResponse(
@@ -402,6 +404,7 @@ async function handleInternalShardedPublicSnapshotAssemble(
       ok: result.ok,
       assembled: result.assembled,
       kind: result.kind,
+      assembly: result.mode,
       monitor_count: result.monitorCount,
       invalid_count: result.invalidCount,
       stale_count: result.staleCount,

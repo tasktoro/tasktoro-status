@@ -278,6 +278,7 @@ async function refreshRuntimeFragmentsViaService(env: Env): Promise<void> {
 }
 
 type ShardedPublicSnapshotKind = 'homepage' | 'status';
+type ShardedPublicSnapshotAssemblyMode = 'validated' | 'json';
 type ShardedPublicSnapshotSeedPart = 'envelope' | 'monitors';
 
 type ShardedPublicSnapshotSeedServiceResult = {
@@ -289,11 +290,17 @@ type ShardedPublicSnapshotSeedServiceResult = {
 
 type ShardedPublicSnapshotAssembleServiceResult = {
   assembled: boolean | null;
+  mode: string | null;
   monitorCount: number | null;
   invalidCount: number | null;
   staleCount: number | null;
   skip: string | null;
 };
+
+function readShardedPublicSnapshotAssemblyMode(env: Env): ShardedPublicSnapshotAssemblyMode {
+  const raw = (env as unknown as Record<string, unknown>).UPTIMER_SHARDED_ASSEMBLER_MODE;
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'json' ? 'json' : 'validated';
+}
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
   if (!text) {
@@ -355,6 +362,7 @@ async function seedShardedPublicSnapshotPartViaService(
 async function assembleShardedPublicSnapshotViaService(
   env: Env,
   kind: ShardedPublicSnapshotKind,
+  mode: ShardedPublicSnapshotAssemblyMode,
 ): Promise<ShardedPublicSnapshotAssembleServiceResult> {
   if (!env.ADMIN_TOKEN) {
     throw new Error('ADMIN_TOKEN missing');
@@ -368,7 +376,7 @@ async function assembleShardedPublicSnapshotViaService(
         Authorization: `Bearer ${env.ADMIN_TOKEN}`,
         'Content-Type': 'application/json; charset=utf-8',
       },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify({ kind, assembly: mode }),
     }),
     SHARDED_PUBLIC_SNAPSHOT_SERVICE_TIMEOUT_MS,
     'sharded public snapshot assemble service',
@@ -381,6 +389,7 @@ async function assembleShardedPublicSnapshotViaService(
   const parsed = parseJsonObject(bodyText);
   return {
     assembled: typeof parsed?.assembled === 'boolean' ? parsed.assembled : null,
+    mode: typeof parsed?.assembly === 'string' ? parsed.assembly : null,
     monitorCount: typeof parsed?.monitor_count === 'number' ? parsed.monitor_count : null,
     invalidCount: typeof parsed?.invalid_count === 'number' ? parsed.invalid_count : null,
     staleCount: typeof parsed?.stale_count === 'number' ? parsed.stale_count : null,
@@ -439,10 +448,11 @@ async function runScheduledShardedPublicSnapshotWork(env: Env): Promise<void> {
   }
 
   if (shouldAssemble) {
+    const assemblyMode = readShardedPublicSnapshotAssemblyMode(env);
     for (const kind of ['homepage', 'status'] as const) {
-      const assembled = await assembleShardedPublicSnapshotViaService(env, kind);
+      const assembled = await assembleShardedPublicSnapshotViaService(env, kind, assemblyMode);
       console.log(
-        `scheduled: sharded_assemble kind=${kind} assembled=${assembled.assembled === null ? '-' : assembled.assembled ? 1 : 0} monitor_count=${assembled.monitorCount ?? '-'} invalid_count=${assembled.invalidCount ?? '-'} stale_count=${assembled.staleCount ?? '-'} skip=${assembled.skip ?? '-'}`,
+        `scheduled: sharded_assemble kind=${kind} mode=${assembled.mode ?? assemblyMode} assembled=${assembled.assembled === null ? '-' : assembled.assembled ? 1 : 0} monitor_count=${assembled.monitorCount ?? '-'} invalid_count=${assembled.invalidCount ?? '-'} stale_count=${assembled.staleCount ?? '-'} skip=${assembled.skip ?? '-'}`,
       );
     }
   }

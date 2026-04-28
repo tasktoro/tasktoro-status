@@ -205,6 +205,7 @@ describe('internal sharded public snapshot assembler route', () => {
       ok: true,
       assembled: true,
       kind: 'homepage',
+      assembly: 'validated',
       generated_at: 1_700_000_000,
       monitor_count: 1,
       invalid_count: 0,
@@ -232,10 +233,39 @@ describe('internal sharded public snapshot assembler route', () => {
       ok: true,
       assembled: true,
       kind: 'status',
+      assembly: 'validated',
       generated_at: 1_700_000_000,
       monitor_count: 1,
       invalid_count: 0,
       stale_count: 0,
+    });
+  });
+
+  it('assembles fragment JSON without parsing every monitor when requested', async () => {
+    const res = await worker.fetch(
+      new Request('http://internal/api/v1/internal/assemble/sharded-public-snapshot', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-admin-token',
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: JSON.stringify({ kind: 'homepage', assembly: 'json', measure_body_bytes: true }),
+      }),
+      createFragmentEnv(),
+      { waitUntil: vi.fn() } as unknown as ExecutionContext,
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      assembled: true,
+      kind: 'homepage',
+      assembly: 'json',
+      generated_at: 1_700_000_000,
+      monitor_count: 1,
+      invalid_count: 0,
+      stale_count: 0,
+      body_bytes: expect.any(Number),
     });
   });
 });

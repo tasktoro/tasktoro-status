@@ -12,16 +12,20 @@ import {
   buildHomepageMonitorFragmentWrites,
   buildStatusEnvelopeFragmentWrite,
   buildStatusMonitorFragmentWrites,
+  readHomepageSnapshotBodyJsonFromFragments,
   readHomepageSnapshotFragments,
+  readStatusSnapshotBodyJsonFromFragments,
   readStatusSnapshotFragments,
 } from '../snapshots/public-monitor-fragments';
 
 export type ShardedPublicSnapshotKind = 'homepage' | 'status';
+export type ShardedPublicSnapshotAssemblyMode = 'validated' | 'json';
 export type ShardedPublicSnapshotSeedPart = 'envelope' | 'monitors' | 'all';
 
 export type ShardedPublicSnapshotAssembleOptions = {
   env: Env;
   kind: ShardedPublicSnapshotKind;
+  mode?: ShardedPublicSnapshotAssemblyMode;
   measureBodyBytes?: boolean;
 };
 
@@ -33,6 +37,7 @@ export type ShardedPublicSnapshotAssembleResult = {
   monitorCount: number;
   invalidCount: number;
   staleCount: number;
+  mode: ShardedPublicSnapshotAssemblyMode;
   bodyBytes?: number | undefined;
   skip?: 'missing_envelope' | 'missing_monitors' | 'invalid_payload';
   error?: boolean;
@@ -66,6 +71,10 @@ function measuredBodyBytes(value: unknown, enabled: boolean): number | undefined
     return undefined;
   }
   return JSON.stringify(value).length;
+}
+
+function bodyJsonBytes(bodyJson: string, enabled: boolean): number | undefined {
+  return enabled ? bodyJson.length : undefined;
 }
 
 function normalizeSliceBounds(offset: number | undefined, limit: number | undefined): {
@@ -223,7 +232,39 @@ export async function seedShardedPublicSnapshotFragments(
 export async function assembleShardedPublicSnapshot(
   opts: ShardedPublicSnapshotAssembleOptions,
 ): Promise<ShardedPublicSnapshotAssembleResult> {
+  const mode = opts.mode ?? 'validated';
   try {
+    if (mode === 'json') {
+      const assembled = opts.kind === 'homepage'
+        ? await readHomepageSnapshotBodyJsonFromFragments(opts.env.DB)
+        : await readStatusSnapshotBodyJsonFromFragments(opts.env.DB);
+      if (!assembled) {
+        return {
+          ok: true,
+          assembled: false,
+          kind: opts.kind,
+          monitorCount: 0,
+          invalidCount: 0,
+          staleCount: 0,
+          mode,
+          skip: 'invalid_payload',
+        };
+      }
+      return {
+        ok: true,
+        assembled: true,
+        kind: opts.kind,
+        generatedAt: assembled.generatedAt,
+        monitorCount: assembled.monitorCount,
+        invalidCount: assembled.invalidCount,
+        staleCount: assembled.staleCount,
+        mode,
+        ...(opts.measureBodyBytes
+          ? { bodyBytes: bodyJsonBytes(assembled.bodyJson, true) }
+          : {}),
+      };
+    }
+
     if (opts.kind === 'homepage') {
       const fragments = await readHomepageSnapshotFragments(opts.env.DB);
       if (!fragments.envelope) {
@@ -234,6 +275,7 @@ export async function assembleShardedPublicSnapshot(
           monitorCount: 0,
           invalidCount: fragments.monitors.invalidCount,
           staleCount: fragments.monitors.staleCount,
+          mode,
           skip: 'missing_envelope',
         };
       }
@@ -251,6 +293,7 @@ export async function assembleShardedPublicSnapshot(
           monitorCount: fragments.monitors.data.length,
           invalidCount: fragments.monitors.invalidCount,
           staleCount: fragments.monitors.staleCount,
+          mode,
           skip:
             fragments.monitors.data.length < fragments.envelope.data.monitor_ids.length
               ? 'missing_monitors'
@@ -266,6 +309,7 @@ export async function assembleShardedPublicSnapshot(
         monitorCount: assembled.monitors.length,
         invalidCount: fragments.monitors.invalidCount,
         staleCount: fragments.monitors.staleCount,
+        mode,
         ...(opts.measureBodyBytes
           ? { bodyBytes: measuredBodyBytes(assembled, true) }
           : {}),
@@ -281,6 +325,7 @@ export async function assembleShardedPublicSnapshot(
         monitorCount: 0,
         invalidCount: fragments.monitors.invalidCount,
         staleCount: fragments.monitors.staleCount,
+        mode,
         skip: 'missing_envelope',
       };
     }
@@ -298,6 +343,7 @@ export async function assembleShardedPublicSnapshot(
         monitorCount: fragments.monitors.data.length,
         invalidCount: fragments.monitors.invalidCount,
         staleCount: fragments.monitors.staleCount,
+        mode,
         skip:
           fragments.monitors.data.length < fragments.envelope.data.monitor_ids.length
             ? 'missing_monitors'
@@ -313,6 +359,7 @@ export async function assembleShardedPublicSnapshot(
       monitorCount: assembled.monitors.length,
       invalidCount: fragments.monitors.invalidCount,
       staleCount: fragments.monitors.staleCount,
+      mode,
       ...(opts.measureBodyBytes ? { bodyBytes: measuredBodyBytes(assembled, true) } : {}),
     };
   } catch (err) {
@@ -324,6 +371,7 @@ export async function assembleShardedPublicSnapshot(
       monitorCount: 0,
       invalidCount: 0,
       staleCount: 0,
+      mode,
       error: true,
     };
   }

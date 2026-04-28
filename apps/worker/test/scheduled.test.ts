@@ -369,6 +369,7 @@ describe('scheduler/scheduled regression', () => {
     env.UPTIMER_SCHEDULED_SHARDED_FRAGMENT_SEED = '1';
     env.UPTIMER_PUBLIC_SHARDED_ASSEMBLER = '1';
     env.UPTIMER_SCHEDULED_SHARDED_ASSEMBLER = '1';
+    env.UPTIMER_SHARDED_ASSEMBLER_MODE = 'json';
     env.UPTIMER_SHARDED_FRAGMENT_SEED_BATCH_SIZE = '2';
     const seedBodies: unknown[] = [];
     const assembleBodies: unknown[] = [];
@@ -444,7 +445,10 @@ describe('scheduler/scheduled regression', () => {
       { kind: 'status', part: 'monitors', monitor_offset: 0, monitor_limit: 2 },
       { kind: 'status', part: 'monitors', monitor_offset: 2, monitor_limit: 2 },
     ]);
-    expect(assembleBodies).toEqual([{ kind: 'homepage' }, { kind: 'status' }]);
+    expect(assembleBodies).toEqual([
+      { kind: 'homepage', assembly: 'json' },
+      { kind: 'status', assembly: 'json' },
+    ]);
     logSpy.mockRestore();
   });
 

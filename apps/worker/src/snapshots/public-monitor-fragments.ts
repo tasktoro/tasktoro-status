@@ -317,6 +317,20 @@ export type PublicSnapshotEnvelopeReadResult<T> = {
   updatedAt: number | null;
 };
 
+export type PublicSnapshotBodyJsonFragmentReadResult = {
+  bodyJson: string;
+  generatedAt: number;
+  monitorCount: number;
+  invalidCount: number;
+  staleCount: number;
+};
+
+type RawMonitorJsonFragmentParseResult = {
+  bodyJsonByMonitorId: Map<number, string>;
+  invalidCount: number;
+  staleCount: number;
+};
+
 function parseFragmentJson(row: PublicSnapshotFragmentRow): unknown | null {
   try {
     return JSON.parse(row.body_json) as unknown;
@@ -487,6 +501,118 @@ export function assemblePublicStatusPayloadFromFragments(
   };
   const parsed = publicStatusResponseSchema.safeParse(assembled);
   return parsed.success ? parsed.data : null;
+}
+
+function looksLikeJsonObjectText(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith('{') && trimmed.endsWith('}');
+}
+
+function parseRawMonitorJsonFragmentRows(
+  rows: readonly PublicSnapshotFragmentRow[],
+  expectedGeneratedAt: number,
+): RawMonitorJsonFragmentParseResult {
+  const bodyJsonByMonitorId = new Map<number, string>();
+  let invalidCount = 0;
+  let staleCount = 0;
+
+  for (const row of rows) {
+    const monitorId = parsePublicMonitorFragmentKey(row.fragment_key);
+    if (monitorId === null) {
+      invalidCount += 1;
+      continue;
+    }
+    if (row.generated_at !== expectedGeneratedAt) {
+      staleCount += 1;
+      continue;
+    }
+    const bodyJson = row.body_json.trim();
+    if (!looksLikeJsonObjectText(bodyJson)) {
+      invalidCount += 1;
+      continue;
+    }
+    bodyJsonByMonitorId.set(monitorId, bodyJson);
+  }
+
+  return { bodyJsonByMonitorId, invalidCount, staleCount };
+}
+
+function assemblePublicSnapshotBodyJsonFromRawMonitorFragments<T extends { monitor_ids: number[] }>(
+  envelope: T,
+  bodyJsonByMonitorId: ReadonlyMap<number, string>,
+): string | null {
+  const monitorJson: string[] = [];
+  for (const monitorId of envelope.monitor_ids) {
+    const bodyJson = bodyJsonByMonitorId.get(monitorId);
+    if (!bodyJson) {
+      return null;
+    }
+    monitorJson.push(bodyJson);
+  }
+
+  const { monitor_ids: _monitorIds, ...publicEnvelope } = envelope;
+  const envelopeJson = JSON.stringify(publicEnvelope);
+  if (envelopeJson === '{}') {
+    return `{"monitors":[${monitorJson.join(',')}]}`;
+  }
+  return `${envelopeJson.slice(0, -1)},"monitors":[${monitorJson.join(',')}]}`;
+}
+
+async function readSnapshotBodyJsonFromFragments<T extends { generated_at: number; monitor_ids: number[] }>(
+  db: D1Database,
+  envelopeSnapshotKey: string,
+  monitorSnapshotKey: string,
+  parseEnvelope: (
+    rows: readonly PublicSnapshotFragmentRow[],
+  ) => PublicSnapshotEnvelopeReadResult<T> | null,
+): Promise<PublicSnapshotBodyJsonFragmentReadResult | null> {
+  const [envelopeRows, monitorRows] = await Promise.all([
+    readPublicSnapshotFragments(db, envelopeSnapshotKey),
+    readPublicSnapshotFragments(db, monitorSnapshotKey),
+  ]);
+  const envelope = parseEnvelope(envelopeRows);
+  if (!envelope) {
+    return null;
+  }
+
+  const monitors = parseRawMonitorJsonFragmentRows(monitorRows, envelope.generatedAt);
+  const bodyJson = assemblePublicSnapshotBodyJsonFromRawMonitorFragments(
+    envelope.data,
+    monitors.bodyJsonByMonitorId,
+  );
+  if (bodyJson === null) {
+    return null;
+  }
+
+  return {
+    bodyJson,
+    generatedAt: envelope.generatedAt,
+    monitorCount: envelope.data.monitor_ids.length,
+    invalidCount: monitors.invalidCount,
+    staleCount: monitors.staleCount,
+  };
+}
+
+export async function readHomepageSnapshotBodyJsonFromFragments(
+  db: D1Database,
+): Promise<PublicSnapshotBodyJsonFragmentReadResult | null> {
+  return await readSnapshotBodyJsonFromFragments(
+    db,
+    HOMEPAGE_ENVELOPE_FRAGMENT_KEY,
+    HOMEPAGE_MONITOR_FRAGMENTS_KEY,
+    parseHomepageEnvelopeFragmentRows,
+  );
+}
+
+export async function readStatusSnapshotBodyJsonFromFragments(
+  db: D1Database,
+): Promise<PublicSnapshotBodyJsonFragmentReadResult | null> {
+  return await readSnapshotBodyJsonFromFragments(
+    db,
+    STATUS_ENVELOPE_FRAGMENT_KEY,
+    STATUS_MONITOR_FRAGMENTS_KEY,
+    parseStatusEnvelopeFragmentRows,
+  );
 }
 
 export async function readHomepageSnapshotFragments(db: D1Database): Promise<{

@@ -18,8 +18,10 @@ import {
   parseStatusEnvelopeFragmentRows,
   parseStatusMonitorFragmentRows,
   PUBLIC_SNAPSHOT_ENVELOPE_FRAGMENT_KEY,
+  readHomepageSnapshotBodyJsonFromFragments,
   readHomepageSnapshotFragments,
   readMonitorRuntimeUpdateFragments,
+  readStatusSnapshotBodyJsonFromFragments,
   readStatusSnapshotFragments,
   STATUS_ENVELOPE_FRAGMENT_KEY,
   STATUS_MONITOR_FRAGMENTS_KEY,
@@ -337,6 +339,71 @@ describe('snapshots/public-monitor-fragments', () => {
       envelope: { generatedAt: 1_700_000_000 },
       monitors: { data: [{ id: 1 }, { id: 2 }], invalidCount: 0 },
     });
+  });
+
+  it('assembles public body JSON from envelope and raw monitor fragments', async () => {
+    const statusEnvelopeWrite = buildStatusEnvelopeFragmentWrite(statusPayload(), 1_700_000_005);
+    const statusMonitorWrites = buildStatusMonitorFragmentWrites(statusPayload(), 1_700_000_005).reverse();
+    const homepageEnvelopeWrite = buildHomepageEnvelopeFragmentWrite(homepagePayload(), 1_700_000_005);
+    const homepageMonitorWrites = buildHomepageMonitorFragmentWrites(homepagePayload(), 1_700_000_005).reverse();
+    const db = createFakeD1Database([
+      {
+        match: 'from public_snapshot_fragments',
+        all: (args) => {
+          if (args[0] === STATUS_ENVELOPE_FRAGMENT_KEY) {
+            return [{
+              fragment_key: statusEnvelopeWrite.fragmentKey,
+              generated_at: statusEnvelopeWrite.generatedAt,
+              body_json: statusEnvelopeWrite.bodyJson,
+              updated_at: statusEnvelopeWrite.updatedAt,
+            }];
+          }
+          if (args[0] === STATUS_MONITOR_FRAGMENTS_KEY) {
+            return statusMonitorWrites.map((write) => ({
+              fragment_key: write.fragmentKey,
+              generated_at: write.generatedAt,
+              body_json: write.bodyJson,
+              updated_at: write.updatedAt,
+            }));
+          }
+          if (args[0] === HOMEPAGE_ENVELOPE_FRAGMENT_KEY) {
+            return [{
+              fragment_key: homepageEnvelopeWrite.fragmentKey,
+              generated_at: homepageEnvelopeWrite.generatedAt,
+              body_json: homepageEnvelopeWrite.bodyJson,
+              updated_at: homepageEnvelopeWrite.updatedAt,
+            }];
+          }
+          if (args[0] === HOMEPAGE_MONITOR_FRAGMENTS_KEY) {
+            return homepageMonitorWrites.map((write) => ({
+              fragment_key: write.fragmentKey,
+              generated_at: write.generatedAt,
+              body_json: write.bodyJson,
+              updated_at: write.updatedAt,
+            }));
+          }
+          return [];
+        },
+      },
+    ]);
+
+    const statusBody = await readStatusSnapshotBodyJsonFromFragments(db);
+    const homepageBody = await readHomepageSnapshotBodyJsonFromFragments(db);
+
+    expect(statusBody).toMatchObject({
+      generatedAt: 1_700_000_000,
+      monitorCount: 2,
+      invalidCount: 0,
+      staleCount: 0,
+    });
+    expect(homepageBody).toMatchObject({
+      generatedAt: 1_700_000_000,
+      monitorCount: 2,
+      invalidCount: 0,
+      staleCount: 0,
+    });
+    expect(JSON.parse(statusBody!.bodyJson)).toEqual(statusPayload());
+    expect(JSON.parse(homepageBody!.bodyJson)).toEqual(homepagePayload());
   });
 
   it('serializes compact monitor runtime update fragments with latest update wins', () => {
